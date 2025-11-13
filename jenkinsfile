@@ -1,74 +1,89 @@
-pipeline{
-    parameters{
-        choice(name: 'terraformAction',choices: ['apply','destroy'],description: 'Choose your terraform action to perform')
+pipeline {
+  parameters {
+    choice(name: 'terraformAction', choices: ['apply', 'destroy'], description: 'Choose your terraform action to perform')
+  }
+
+  environment {
+    AWS_ACCESS_KEY_ID     = credentials('AWS_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
+  }
+
+  agent any
+
+  stages {
+    stage('Checkout') {
+      steps {
+        // Clone the repo into workspace root (no extra dir)
+        git branch: 'jenkins-server', url: 'https://github.com/Prajwal8651/git-for-devops.git'
+      }
     }
 
-    environment {
-        AWS_ACCESS_KEY_ID = credentials('AWS_ACCESS_KEY_ID')
-        AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
+    stage('Detect Terraform Directory') {
+      steps {
+        script {
+          // Detect common terraform directory names. Falls back to workspace root (.)
+          def detector = '''
+if [ -d terraform ]; then
+  echo terraform
+elif [ -d Project-1 ]; then
+  echo Project-1
+elif [ -d iac-repo/Project-1 ]; then
+  echo iac-repo/Project-1
+else
+  echo .
+fi
+'''
+          env.TF_DIR = sh(script: detector, returnStdout: true).trim()
+          echo "Using Terraform directory: ${env.TF_DIR}"
+        }
+      }
     }
 
-    agent any
+    stage('Plan') {
+      steps {
+        script {
+          // Run terraform init/plan inside detected directory and write human-readable plan to workspace root
+          dir(env.TF_DIR) {
+            sh 'terraform init -input=false'
+            sh 'terraform plan -out=tfplan -input=false'
+            // Write plan to workspace root for approval review
+            sh "terraform show -no-color tfplan > ${env.WORKSPACE}/tfplan.txt"
+          }
+        }
+      }
+    }
 
-    // All stage definitions MUST be inside this single stages block
-    stages{
-        stage('checkout'){
-            steps{
-                script {
-                    // Assuming Project-1 is the directory inside the git repo containing the terraform code
-                    // If you want to use a specific directory name for checkout, use it consistently.
-                    // Renamed 'terraform' dir to 'iac-repo' for clarity, adjust if needed.
-                    dir("iac-repo"){ 
-                        git branch: 'IAC-Project',url:'https://github.com/ManojKRISHNAPPA/MicroDegree_DevOps-06102025-M-Batch.git'
-                    }
-                }
-            }
+    stage('Approval') {
+      steps {
+        script {
+          // Read the plan file created in workspace root and prompt for approval (shows the plan in the input text box)
+          def planContent = readFile "${env.WORKSPACE}/tfplan.txt"
+          input message: "Do you want to proceed with terraform action?",
+                parameters: [text(name: 'planReview', description: 'Review the generated plan and confirm', defaultValue: planContent)]
         }
-    
-        stage('Plan'){
-            steps{
-                // Navigate into the checked-out directory and then into the Project-1 subdirectory
-                sh 'cd iac-repo/Project-1; terraform init' 
-                sh 'cd iac-repo/Project-1; terraform plan -out tfplan'
-                sh 'cd iac-repo/Project-1; terraform show -no-color tfplan >> ../tfplan.txt' // Write plan to parent dir for easier access
+      }
+    }
+
+    stage('Apply or Destroy') {
+      when {
+        expression { return params.terraformAction == 'apply' || params.terraformAction == 'destroy' }
+      }
+
+      steps {
+        script {
+          if (params.terraformAction == 'apply') {
+            dir(env.TF_DIR) {
+              // Apply using the previously-created plan file (tfplan)
+              sh 'terraform apply -input=false tfplan'
             }
+          } else {
+            dir(env.TF_DIR) {
+              // Destroy the infrastructure
+              sh 'terraform destroy -auto-approve'
+            }
+          }
         }
-    
-        stage('approval'){
-            steps{
-                script {
-                    // Read the plan file from the workspace root or the checked out directory (using iac-repo/tfplan.txt)
-                    def plan = readFile 'iac-repo/tfplan.txt'
-                    
-                    // Correcting the parameter list for input step
-                    input(
-                        message: "Do you want to proceed with terraform action..?",
-                        parameters: [
-                            text(name: 'planReview', description: 'Can you review your code one more time', defaultValue: plan)
-                        ]
-                    )
-                }
-            }
-        }
-    
-        stage('Apply or Destroy'){
-            when{
-                expression{
-                    return params.terraformAction == 'apply' || params.terraformAction == 'destroy'
-                }
-            }
-    
-            steps{
-                script{
-                    if (params.terraformAction == 'apply'){
-                        // Use the correct directory
-                        sh "cd iac-repo/Project-1; terraform apply -input=false tfplan" 
-                    } else if(params.terraformAction == 'destroy'){
-                        // Use the correct directory
-                        sh "cd iac-repo/Project-1; terraform destroy -auto-approve" 
-                    }
-                }
-            }
-        }
-    } // <--- The stages block closes here!
+      }
+    }
+  } // stages
 }
