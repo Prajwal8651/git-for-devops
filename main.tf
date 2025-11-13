@@ -39,7 +39,7 @@ resource "aws_route_table" "public-rt" {
 resource "aws_internet_gateway" "demo-igw" {
   vpc_id = aws_vpc.demo.id
     tags = {
-        Name = "demo-igw"
+        Name = "demo-igw1"
     }
 }
 #creating publuic route
