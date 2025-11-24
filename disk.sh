@@ -19,5 +19,5 @@ else
     echo "Temperature check: 'sensors' command not found. Install with: sudo apt install lm-sensors"
 fi
 
-echo "=============================="
+echo "============================="
 
